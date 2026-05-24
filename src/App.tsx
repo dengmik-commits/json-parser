@@ -37,6 +37,8 @@ import {
 } from "@ant-design/icons";
 import CodeMirror from "@uiw/react-codemirror";
 import { json } from "@codemirror/lang-json";
+import { lintGutter, forEachDiagnostic } from "@codemirror/lint";
+import { hoverTooltip } from "@codemirror/view";
 import type { SearchResult, DiffItem, ValidateResult, JsonPathResult } from "./types";
 import "./App.css";
 
@@ -140,6 +142,30 @@ function jsonToTreeNodes(
 
   return { title: String(val), key: nodeKey, isLeaf: true };
 }
+
+const fullWidthLintHover = hoverTooltip((view, pos) => {
+  const diagnostics: { from: number; to: number; message: string }[] = [];
+  forEachDiagnostic(view.state, (d, from, to) => {
+    if (pos >= from && pos <= to) diagnostics.push({ from, to, message: d.message });
+  });
+  if (diagnostics.length === 0) return null;
+  return {
+    pos: Math.min(...diagnostics.map((d) => d.from)),
+    end: Math.max(...diagnostics.map((d) => d.to)),
+    above: true,
+    create() {
+      const dom = document.createElement("div");
+      dom.style.cssText =
+        "max-width:700px;padding:8px 12px;white-space:pre-wrap;word-break:break-word;background:#fff;border:1px solid #e8e8e8;border-radius:6px;box-shadow:0 2px 8px rgba(0,0,0,0.15);font-size:13px;line-height:1.6;color:#333;";
+      diagnostics.forEach((d, i) => {
+        const el = dom.appendChild(document.createElement("div"));
+        el.textContent = d.message;
+        if (i < diagnostics.length - 1) el.style.borderBottom = "1px solid #f0f0f0";
+      });
+      return { dom };
+    },
+  };
+});
 
 export default function App() {
   const [input, setInput] = useState("");
@@ -434,7 +460,7 @@ export default function App() {
                   </Space>
                 </div>
                 <div className="panel-body">
-                  <CodeMirror value={input} onChange={(v) => { setInput(v); parseTree(v); }} height="100%" style={{ height: "100%" }} extensions={[json()]} basicSetup={{ lineNumbers: true, foldGutter: true, autocompletion: false }} />
+                  <CodeMirror value={input} onChange={(v) => { setInput(v); parseTree(v); }} height="100%" style={{ height: "100%" }} extensions={[lintGutter(), fullWidthLintHover, json()]} basicSetup={{ lineNumbers: true, foldGutter: true, autocompletion: false }} />
                 </div>
               </div>
             </Splitter.Panel>

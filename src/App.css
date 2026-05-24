@@ -120,3 +120,17 @@ html, body, #root {
 ::-webkit-scrollbar-thumb:hover {
   background: #bbb;
 }
+
+/* CodeMirror diagnostic hover tooltip - prevent truncation */
+.cm-tooltip {
+  max-width: 600px !important;
+}
+
+.cm-tooltip.cm-diagnostic {
+  max-width: 600px !important;
+}
+
+.cm-diagnosticText {
+  white-space: pre-wrap !important;
+  word-break: break-all !important;
+}
