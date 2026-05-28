@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   Layout,
@@ -39,6 +39,118 @@ import CodeMirror from "@uiw/react-codemirror";
 import { json } from "@codemirror/lang-json";
 import { lintGutter, forEachDiagnostic } from "@codemirror/lint";
 import { hoverTooltip } from "@codemirror/view";
+
+// JSON syntax highlight for read-only output.
+// Uses a <pre> tag so browser-native text selection works perfectly.
+// Fold/collapse is implemented with clickable toggles on { and [ lines.
+function highlightJson(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(
+    /("(?:[^"\\]|\\.)*")\s*(:?)|\b(true|false|null)\b|(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/g,
+    (match, str, colon, bool, num) => {
+      if (str !== undefined) return colon ? `<span class="json-key">${match}</span>` : `<span class="json-string">${match}</span>`;
+      if (bool !== undefined) return `<span class="json-bool">${match}</span>`;
+      if (num !== undefined) return `<span class="json-number">${match}</span>`;
+      return match;
+    }
+  );
+}
+
+// Render formatted JSON with foldable blocks in a <pre> tag.
+// Each { or [ that starts a multi-line block gets a clickable toggle.
+// Clicking the toggle collapses the block, showing just "..." with a count.
+function JsonFoldableView({ text }: { text: string }) {
+  const [folded, setFolded] = useState<Set<number>>(new Set());
+  const lines = text.split("\n");
+
+  // Find which lines are fold-openers: lines ending with { or [ where the
+  // matching close is on a later line (not inline like {"a":1})
+  const foldRanges: { open: number; close: number; inline: boolean }[] = [];
+  const stack: { char: string; line: number }[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trimEnd();
+    if (trimmed.endsWith("{") || trimmed.endsWith("[") || trimmed.endsWith("{,") || trimmed.endsWith("[,")) {
+      const char = trimmed.endsWith("{") || trimmed.endsWith("{,") ? "{" : "[";
+      // Check if this is an inline block (closing bracket on same line)
+      // by checking if the next non-whitespace line after content has matching close
+      stack.push({ char, line: i });
+    }
+    const lastChar = trimmed[trimmed.length - 1];
+    if (lastChar === "}" || lastChar === "]") {
+      const openChar = lastChar === "}" ? "{" : "[";
+      // Pop matching open from stack
+      for (let s = stack.length - 1; s >= 0; s--) {
+        if (stack[s].char === openChar) {
+          const openLine = stack[s].line;
+          if (i > openLine + 1) {
+            foldRanges.push({ open: openLine, close: i, inline: false });
+          }
+          stack.splice(s, 1);
+          break;
+        }
+      }
+    }
+  }
+
+  const toggle = (line: number) => {
+    setFolded(prev => {
+      const next = new Set(prev);
+      if (next.has(line)) next.delete(line);
+      else next.add(line);
+      return next;
+    });
+  };
+
+  // Render lines, skipping folded regions
+  const rendered: React.ReactNode[] = [];
+  let skipUntil = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (i < skipUntil) continue;
+    const range = foldRanges.find(r => r.open === i);
+    const isFolded = range && folded.has(range.open);
+
+    if (range && isFolded) {
+      // Show opener line + collapsed indicator + closing line
+      const opener = lines[range.open];
+      const closer = lines[range.close];
+      const innerCount = range.close - range.open - 1;
+      rendered.push(
+        <div key={i} className="json-fold-line">
+          <span className="json-fold-toggle json-fold-toggle-collapsed" onClick={() => toggle(range.open)} title="展开">▶</span>
+          <span dangerouslySetInnerHTML={{ __html: highlightJson(opener.replace(/,$/, "")) }} />
+          <span className="json-fold-hint" onClick={() => toggle(range.open)}> ··· {innerCount} 项 </span>
+          {closer.trimEnd().endsWith(",") ? <span dangerouslySetInnerHTML={{ __html: highlightJson(",") }} /> : null}
+        </div>
+      );
+      skipUntil = range.close; // skip to closing line (will render it)
+      continue;
+    }
+
+    if (range && !isFolded) {
+      rendered.push(
+        <div key={i} className="json-fold-line">
+          <span className="json-fold-toggle json-fold-toggle-open" onClick={() => toggle(range.open)} title="折叠">▼</span>
+          <span dangerouslySetInnerHTML={{ __html: highlightJson(lines[i]) }} />
+        </div>
+      );
+      continue;
+    }
+
+    // Normal line (also the closing line of a folded block)
+    rendered.push(
+      <div key={i} className="json-fold-line">
+        <span className="json-fold-toggle" />
+        <span dangerouslySetInnerHTML={{ __html: highlightJson(lines[i]) }} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="json-foldable-output" style={{ height: "100%", overflow: "auto" }}>
+      {rendered}
+    </div>
+  );
+}
+
 import type { SearchResult, DiffItem, ValidateResult, JsonPathResult } from "./types";
 import "./App.css";
 
@@ -199,6 +311,18 @@ export default function App() {
   const [detailVisible, setDetailVisible] = useState(false);
   const [detailKey, setDetailKey] = useState("");
   const [detailValue, setDetailValue] = useState("");
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.ctrlKey && e.key === "c" && detailVisible) {
+        e.preventDefault();
+        navigator.clipboard.writeText(detailValue);
+        message.success("已复制到剪贴板");
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [detailVisible, detailValue]);
 
   const getAllKeys = (nodes: DataNode[]): string[] => {
     const keys: string[] = [];
@@ -486,7 +610,7 @@ export default function App() {
                 <div className="panel-body" style={{ padding: activeTab === "output" ? 0 : 12 }}>
                   {activeTab === "output" && (
                     <div style={{ height: "100%", position: "relative" }}>
-                      <CodeMirror value={output} height="100%" style={{ height: "100%" }} extensions={[json()]} readOnly editable={false} basicSetup={{ lineNumbers: true, foldGutter: true }} />
+                      {output ? <JsonFoldableView text={output} /> : <Empty description="格式化后输出" style={{ marginTop: 60 }} />}
                       {output && <Button size="small" type="text" icon={<CopyOutlined />} onClick={() => handleCopy(output)} style={{ position: "absolute", top: 6, right: 10, zIndex: 10 }} />}
                     </div>
                   )}
@@ -549,7 +673,7 @@ export default function App() {
                       {jsonPathResult && jsonPathResult.results.length > 0 ? jsonPathResult.results.map((r, i) => (
                         <div key={i} style={{ background: "#fafafa", border: "1px solid #e8e8e8", borderRadius: 6, padding: 12, marginBottom: 12, position: "relative" }}>
                           <div style={{ fontSize: 11, color: "#999", marginBottom: 6 }}>Path: <Text code style={{ fontSize: 11 }}>{jsonPathResult.paths[i] || `Result ${i + 1}`}</Text></div>
-                          <CodeMirror value={r} height="auto" extensions={[json()]} readOnly editable={false} basicSetup={{ lineNumbers: true, foldGutter: true }} />
+                          <JsonFoldableView text={r} />
                           <Button size="small" type="text" icon={<CopyOutlined />} onClick={() => handleCopy(r)} style={{ position: "absolute", top: 8, right: 8 }} />
                         </div>
                       )) : jsonPathResult ? <Empty description="无结果" /> : <Empty description="输入 JSONPath 表达式" />}
@@ -570,21 +694,27 @@ export default function App() {
 
       {/* Tree Node Detail Modal */}
       <Modal
-        title={detailKey}
+        title={
+          <Space>
+            <span>{detailKey}</span>
+            <Tooltip title="复制 (Ctrl+C)">
+              <Button
+                type="text"
+                icon={<CopyOutlined />}
+                onClick={() => {
+                  navigator.clipboard.writeText(detailValue);
+                  message.success("已复制到剪贴板");
+                }}
+              />
+            </Tooltip>
+          </Space>
+        }
         open={detailVisible}
         onCancel={() => setDetailVisible(false)}
         footer={null}
         width={700}
       >
-        <CodeMirror
-          value={detailValue}
-          height="auto"
-          maxHeight="400px"
-          extensions={[json()]}
-          readOnly
-          editable={false}
-          basicSetup={{ lineNumbers: true, foldGutter: true }}
-        />
+        <JsonFoldableView text={detailValue} />
       </Modal>
     </Layout>
   );
