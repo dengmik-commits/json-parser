@@ -1,0 +1,5 @@
+# Normalize to LF on checkin, keep LF on checkout
+* text=auto eol=lf
+
+# Cargo.toml specifically
+src-tauri/Cargo.toml text eol=lf
