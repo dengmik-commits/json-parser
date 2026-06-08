@@ -192,10 +192,8 @@ fn search_value(
                                 match_type: "value".to_string(),
                             });
                         }
-                    } else {
-                        // nested object or array — recurse
-                        search_value(val, query, query_lower, case_sensitive, keys_only, &path, results);
                     }
+                    // nested objects/arrays recurse handled below
                 }
 
                 // Recurse for deeper levels

@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   Layout,
@@ -162,13 +163,16 @@ function jsonToTreeNodes(
   key: string,
   parentKey?: string,
   onNodeDoubleClick?: (key: string, value: string) => void,
+  matchPaths?: Set<string>,
 ): DataNode {
   const nodeKey = parentKey ? `${parentKey}.${key}` : key;
+  const isMatch = matchPaths?.has(nodeKey);
+  const matchStyle = isMatch ? { background: "#fff7e6", borderRadius: 3, padding: "1px 4px", margin: "-1px -4px" } : undefined;
 
   if (val === null) {
     return {
       title: (
-        <div style={{ display: "flex" }}>
+        <div style={{ display: "flex", ...matchStyle }}>
           <Text strong style={{ color: "#0550ae", flexShrink: 0 }}>{key}:</Text>
           <Text type="secondary" style={{ paddingLeft: 4 }}>null</Text>
         </div>
@@ -181,7 +185,7 @@ function jsonToTreeNodes(
   if (typeof val === "boolean") {
     return {
       title: (
-        <div style={{ display: "flex" }}>
+        <div style={{ display: "flex", ...matchStyle }}>
           <Text strong style={{ color: "#0550ae", flexShrink: 0 }}>{key}:</Text>
           <Text type="secondary" style={{ paddingLeft: 4, fontFamily: "monospace" }}>{val.toString()}</Text>
         </div>
@@ -194,7 +198,7 @@ function jsonToTreeNodes(
   if (typeof val === "number") {
     return {
       title: (
-        <div style={{ display: "flex" }}>
+        <div style={{ display: "flex", ...matchStyle }}>
           <Text strong style={{ color: "#0550ae", flexShrink: 0 }}>{key}:</Text>
           <Text type="secondary" style={{ paddingLeft: 4, fontFamily: "monospace" }}>{val}</Text>
         </div>
@@ -212,7 +216,7 @@ function jsonToTreeNodes(
             e.stopPropagation();
             onNodeDoubleClick?.(nodeKey, val);
           }}
-          style={{ display: "flex", cursor: "pointer" }}
+          style={{ display: "flex", cursor: "pointer", ...matchStyle }}
           title="双击查看完整内容"
         >
           <Text strong style={{ color: "#0550ae", flexShrink: 0 }}>{key}:</Text>
@@ -227,13 +231,13 @@ function jsonToTreeNodes(
   if (Array.isArray(val)) {
     return {
       title: (
-        <span>
+        <span style={matchStyle}>
           <Text strong style={{ color: "#0550ae" }}>{key}</Text>
           <Tag color="orange" style={{ marginLeft: 8 }}>[{val.length}]</Tag>
         </span>
       ),
       key: nodeKey,
-      children: val.map((item, i) => jsonToTreeNodes(item, `[${i}]`, nodeKey, onNodeDoubleClick)),
+      children: val.map((item, i) => jsonToTreeNodes(item, `[${i}]`, nodeKey, onNodeDoubleClick, matchPaths)),
     };
   }
 
@@ -241,13 +245,13 @@ function jsonToTreeNodes(
     const entries = Object.entries(val as Record<string, unknown>);
     return {
       title: (
-        <span>
+        <span style={matchStyle}>
           <Text strong style={{ color: "#0550ae" }}>{key}</Text>
           <Tag color="cyan" style={{ marginLeft: 8 }}>{"{ }"} {entries.length}</Tag>
         </span>
       ),
       key: nodeKey,
-      children: entries.map(([k, v]) => jsonToTreeNodes(v, k, nodeKey, onNodeDoubleClick)),
+      children: entries.map(([k, v]) => jsonToTreeNodes(v, k, nodeKey, onNodeDoubleClick, matchPaths)),
     };
   }
 
@@ -282,12 +286,14 @@ export default function App() {
   const [input, setInput] = useState("");
   const [output, setOutput] = useState("");
   const [indent, setIndent] = useState(2);
-  const [treeData, setTreeData] = useState<DataNode[]>([]);
+  const [baseTreeData, setBaseTreeData] = useState<DataNode[]>([]);
   const [treeExpanded, setTreeExpanded] = useState<string[]>([]);
   const [activeTab, setActiveTab] = useState("output");
 
   // Search
   const [searchQuery, setSearchQuery] = useState("");
+  const [searchMatchPaths, setSearchMatchPaths] = useState<Set<string>>(new Set());
+  const [searchActive, setSearchActive] = useState(false);
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [caseSensitive, setCaseSensitive] = useState(false);
   const [keysOnly, setKeysOnly] = useState(false);
@@ -319,6 +325,18 @@ export default function App() {
         navigator.clipboard.writeText(detailValue);
         message.success("已复制到剪贴板");
       }
+      if (e.ctrlKey && e.key === "f") {
+        // Allow native find only in the right panel; block it in the input CodeMirror
+        const activeEl = document.activeElement;
+        const inInputPanel = activeEl?.closest(".cm-editor");
+        if (inInputPanel) {
+          e.preventDefault();
+          e.stopPropagation();
+          // Focus the right panel tree area so next Ctrl+F finds there
+          document.querySelector(".panel:nth-child(2)")?.scrollIntoView();
+        }
+        // else: right panel or other area → let browser native find work normally
+      }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
@@ -342,13 +360,38 @@ export default function App() {
       const nodes = Array.isArray(parsed)
         ? [jsonToTreeNodes(parsed, "$", undefined, (k, v) => { setDetailKey(k); setDetailValue(v); setDetailVisible(true); })]
         : Object.entries(parsed).map(([k, v]) => jsonToTreeNodes(v, k, "$", (k, v) => { setDetailKey(k); setDetailValue(v); setDetailVisible(true); }));
-      setTreeData(nodes);
+      setBaseTreeData(nodes);
       const firstLevelKeys = nodes.map((n) => n.key as string);
       setTreeExpanded(firstLevelKeys);
+      setSearchMatchPaths(new Set());
+      setSearchActive(false);
     } catch {
-      setTreeData([]);
+      setBaseTreeData([]);
     }
   }, []);
+
+  // Rebuild tree with search highlights when baseTreeData or searchMatchPaths change
+  const treeData = useMemo(() => {
+    if (!searchActive || searchMatchPaths.size === 0) return baseTreeData;
+    return baseTreeData.map(node => applySearchHighlight(node, searchMatchPaths));
+  }, [baseTreeData, searchMatchPaths, searchActive]);
+
+  // Helpers
+  function applySearchHighlight(node: DataNode, matchPaths: Set<string>): DataNode {
+    const isMatch = matchPaths.has(node.key as string);
+    const result: DataNode = { ...node };
+    if (isMatch) {
+      result.title = (
+        <span style={{ background: "#fff7e6", borderRadius: 3, padding: "1px 4px" }}>
+          {node.title as ReactNode}
+        </span>
+      );
+    }
+    if (node.children) {
+      result.children = node.children.map(child => applySearchHighlight(child, matchPaths));
+    }
+    return result;
+  }
 
   const handleFormat = async () => {
     try {
@@ -415,12 +458,62 @@ export default function App() {
         caseSensitive,
         keysOnly,
       });
+      const matchPaths = new Set(results.map(r => r.path));
+      setSearchMatchPaths(matchPaths);
+      setSearchActive(true);
       setSearchResults(results);
-      setActiveTab("search");
+      setActiveTab("tree");
+      // Auto-expand all ancestors of matched paths
+      const toExpand = new Set<string>();
+      for (const p of matchPaths) {
+        const parts = p.split(".");
+        let acc = parts[0];
+        toExpand.add(acc);
+        for (let i = 1; i < parts.length; i++) {
+          acc += "." + parts[i];
+          toExpand.add(acc);
+        }
+      }
+      setTreeExpanded(prev => {
+        const merged = new Set(prev);
+        toExpand.forEach(k => merged.add(k));
+        return Array.from(merged) as string[];
+      });
       message.info(`找到 ${results.length} 条匹配`);
     } catch (e) {
       message.error(String(e));
     }
+  };
+
+  const navigateToResult = (path: string) => {
+    setActiveTab("tree");
+    setSelectedNodePath(path);
+    // Ensure all ancestors are expanded
+    const parts = path.split(".");
+    const ancestors: string[] = [];
+    let acc = parts[0];
+    ancestors.push(acc);
+    for (let i = 1; i < parts.length; i++) {
+      acc += "." + parts[i];
+      ancestors.push(acc);
+    }
+    setTreeExpanded(prev => {
+      const merged = new Set(prev);
+      ancestors.forEach(k => merged.add(k));
+      return Array.from(merged) as string[];
+    });
+    // Scroll to the node after a short delay (wait for tree to re-render)
+    setTimeout(() => {
+      const el = document.querySelector(`.ant-tree [data-key="${CSS.escape(path)}"]`);
+      if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 100);
+  };
+
+  const clearSearch = () => {
+    setSearchQuery("");
+    setSearchMatchPaths(new Set());
+    setSearchActive(false);
+    setSearchResults([]);
   };
 
   const handleDiff = async () => {
@@ -459,13 +552,6 @@ export default function App() {
     navigator.clipboard.writeText(text);
     message.success("已复制");
   };
-
-  const searchColumns = [
-    { title: "路径", dataIndex: "path", key: "path", width: 180, render: (v: string) => <Text code>{v}</Text> },
-    { title: "类型", dataIndex: "match_type", key: "match_type", width: 70, render: (v: string) => <Tag color={v === "key" ? "blue" : "green"}>{v === "key" ? "键名" : "值"}</Tag> },
-    { title: "键名", dataIndex: "key", key: "key", width: 100 },
-    { title: "值", dataIndex: "value", key: "value", ellipsis: true },
-  ];
 
   const diffColumns = [
     { title: "路径", dataIndex: "path", key: "path", width: 180, render: (v: string) => <Text code>{v}</Text> },
@@ -545,6 +631,37 @@ export default function App() {
         </div>
       </div>
 
+      {/* Search results panel */}
+      {searchActive && searchResults.length > 0 && (
+        <div style={{ background: "#fff", borderBottom: "1px solid #e8e8e8", maxHeight: 200, overflow: "auto" }}>
+          {searchResults.map((r, i) => (
+            <div
+              key={i}
+              onClick={() => navigateToResult(r.path)}
+              style={{
+                display: "flex", alignItems: "center", gap: 10,
+                padding: "4px 16px", cursor: "pointer", fontSize: 12,
+                borderBottom: "1px solid #f5f5f5",
+                transition: "background 0.15s",
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = "#e6f7ff")}
+              onMouseLeave={(e) => (e.currentTarget.style.background = "")}
+            >
+              <Tag color={r.match_type === "key" ? "blue" : "green"} style={{ margin: 0, flexShrink: 0 }}>
+                {r.match_type === "key" ? "键名" : "值"}
+              </Tag>
+              <Text code style={{ fontSize: 11, flexShrink: 0, maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {"> " + r.path.split(".").slice(1).join(" > ")}
+              </Text>
+              {r.key && <Text strong style={{ fontSize: 11, color: "#0550ae", flexShrink: 0 }}>{r.key}</Text>}
+              <Text type="secondary" style={{ fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {r.value || ""}
+              </Text>
+            </div>
+          ))}
+        </div>
+      )}
+
       <Content style={{ flex: 1, overflow: "hidden" }}>
         {diffMode ? (
           <Splitter style={{ height: "100%" }}>
@@ -588,7 +705,7 @@ export default function App() {
                   JSON 输入
                   <Space size="small" style={{ marginLeft: "auto" }}>
                     <Button size="small" type="text" icon={<CopyOutlined />} onClick={() => handleCopy(input)} />
-                    <Button size="small" type="text" icon={<DeleteOutlined />} onClick={() => { setInput(""); setTreeData([]); }} />
+                    <Button size="small" type="text" icon={<DeleteOutlined />} onClick={() => { setInput(""); setBaseTreeData([]); }} />
                   </Space>
                 </div>
                 <div className="panel-body">
@@ -609,7 +726,6 @@ export default function App() {
                     items={[
                       { key: "output", label: "输出" },
                       { key: "tree", label: "树形视图" },
-                      { key: "search", label: <span>搜索结果 {searchResults.length > 0 && <Badge count={searchResults.length} size="small" style={{ marginLeft: 4 }} />}</span> },
                       { key: "validate", label: "校验结果" },
                       { key: "jsonpath", label: "JSONPath" },
                     ]}
@@ -626,7 +742,7 @@ export default function App() {
                   {activeTab === "tree" && (
                     treeData.length > 0 ? (
                       <div>
-                        <div style={{ marginBottom: 8, display: "flex", gap: 8 }}>
+                        <div style={{ marginBottom: 8, display: "flex", gap: 8, alignItems: "center" }}>
                           <Button
                             size="small"
                             icon={<ExpandOutlined />}
@@ -641,6 +757,12 @@ export default function App() {
                           >
                             全部折叠
                           </Button>
+                          {searchActive && (
+                            <>
+                              <Badge count={searchMatchPaths.size} size="small" style={{ marginLeft: 8 }} />
+                              <Button size="small" danger type="text" onClick={clearSearch}>清除搜索</Button>
+                            </>
+                          )}
                         </div>
                         <Tree
                           showLine
@@ -656,12 +778,6 @@ export default function App() {
                         />
                       </div>
                     ) : <Empty description="输入合法的 JSON" style={{ marginTop: 60 }} />
-                  )}
-
-                  {activeTab === "search" && (
-                    searchResults.length > 0 ? (
-                      <Table dataSource={searchResults.map((s, i) => ({ ...s, key: i }))} columns={searchColumns} size="small" pagination={{ pageSize: 50, size: "small" }} scroll={{ y: "calc(100vh - 200px)" }} />
-                    ) : <Empty description="搜索键名或值" style={{ marginTop: 60 }} />
                   )}
 
                   {activeTab === "validate" && (
