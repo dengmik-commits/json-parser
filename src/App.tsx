@@ -168,10 +168,10 @@ function jsonToTreeNodes(
   if (val === null) {
     return {
       title: (
-        <span>
-          <Text strong style={{ color: "#1a1a1a" }}>{key}</Text>
-          <Tag color="default" style={{ marginLeft: 8 }}>null</Tag>
-        </span>
+        <div style={{ display: "flex" }}>
+          <Text strong style={{ color: "#0550ae", flexShrink: 0 }}>{key}:</Text>
+          <Text type="secondary" style={{ paddingLeft: 4 }}>null</Text>
+        </div>
       ),
       key: nodeKey,
       isLeaf: true,
@@ -181,10 +181,10 @@ function jsonToTreeNodes(
   if (typeof val === "boolean") {
     return {
       title: (
-        <span>
-          <Text strong style={{ color: "#1a1a1a" }}>{key}</Text>
-          <Tag color="purple" style={{ marginLeft: 8 }}>{val.toString()}</Tag>
-        </span>
+        <div style={{ display: "flex" }}>
+          <Text strong style={{ color: "#0550ae", flexShrink: 0 }}>{key}:</Text>
+          <Text type="secondary" style={{ paddingLeft: 4, fontFamily: "monospace" }}>{val.toString()}</Text>
+        </div>
       ),
       key: nodeKey,
       isLeaf: true,
@@ -194,10 +194,10 @@ function jsonToTreeNodes(
   if (typeof val === "number") {
     return {
       title: (
-        <span>
-          <Text strong style={{ color: "#1a1a1a" }}>{key}</Text>
-          <Tag color="blue" style={{ marginLeft: 8 }}>{val}</Tag>
-        </span>
+        <div style={{ display: "flex" }}>
+          <Text strong style={{ color: "#0550ae", flexShrink: 0 }}>{key}:</Text>
+          <Text type="secondary" style={{ paddingLeft: 4, fontFamily: "monospace" }}>{val}</Text>
+        </div>
       ),
       key: nodeKey,
       isLeaf: true,
@@ -205,20 +205,19 @@ function jsonToTreeNodes(
   }
 
   if (typeof val === "string") {
-    const display = val.length > 60 ? val.slice(0, 60) + "…" : val;
     return {
       title: (
-        <span
+        <div
           onDoubleClick={(e) => {
             e.stopPropagation();
             onNodeDoubleClick?.(nodeKey, val);
           }}
-          style={{ cursor: "pointer" }}
+          style={{ display: "flex", cursor: "pointer" }}
           title="双击查看完整内容"
         >
-          <Text strong style={{ color: "#1a1a1a" }}>{key}</Text>
-          <Tag color="green" style={{ marginLeft: 8 }}>"{display}"</Tag>
-        </span>
+          <Text strong style={{ color: "#0550ae", flexShrink: 0 }}>{key}:</Text>
+          <span style={{ color: "#0a3069", paddingLeft: 4, wordBreak: "break-word" }}>"{val}"</span>
+        </div>
       ),
       key: nodeKey,
       isLeaf: true,
@@ -229,7 +228,7 @@ function jsonToTreeNodes(
     return {
       title: (
         <span>
-          <Text strong style={{ color: "#1a1a1a" }}>{key}</Text>
+          <Text strong style={{ color: "#0550ae" }}>{key}</Text>
           <Tag color="orange" style={{ marginLeft: 8 }}>[{val.length}]</Tag>
         </span>
       ),
@@ -243,7 +242,7 @@ function jsonToTreeNodes(
     return {
       title: (
         <span>
-          <Text strong style={{ color: "#1a1a1a" }}>{key}</Text>
+          <Text strong style={{ color: "#0550ae" }}>{key}</Text>
           <Tag color="cyan" style={{ marginLeft: 8 }}>{"{ }"} {entries.length}</Tag>
         </span>
       ),
@@ -311,6 +310,7 @@ export default function App() {
   const [detailVisible, setDetailVisible] = useState(false);
   const [detailKey, setDetailKey] = useState("");
   const [detailValue, setDetailValue] = useState("");
+  const [selectedNodePath, setSelectedNodePath] = useState("");
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -535,6 +535,14 @@ export default function App() {
         <Switch checked={caseSensitive} onChange={setCaseSensitive} size="small" />
         <Text type="secondary" style={{ fontSize: 11 }}>仅键名</Text>
         <Switch checked={keysOnly} onChange={setKeysOnly} size="small" />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          {selectedNodePath && (
+            <div style={{ padding: "2px 10px", background: "#f0f5ff", border: "1px solid #d6e4ff", borderRadius: 4, fontSize: 12, color: "#1d39c4", fontFamily: "monospace", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", lineHeight: "20px" }}>
+              <span style={{ fontWeight: 600, marginRight: 6 }}>Key Path:</span>
+              {"> " + selectedNodePath.split(".").slice(1).join(" > ")}
+            </div>
+          )}
+        </div>
       </div>
 
       <Content style={{ flex: 1, overflow: "hidden" }}>
@@ -638,7 +646,11 @@ export default function App() {
                           showLine
                           showIcon
                           expandedKeys={treeExpanded}
+                          selectedKeys={selectedNodePath ? [selectedNodePath] : []}
                           onExpand={(keys) => setTreeExpanded(keys as string[])}
+                          onSelect={(keys) => {
+                            setSelectedNodePath(keys.length > 0 ? (keys[0] as string) : "");
+                          }}
                           treeData={treeData}
                           style={{ fontSize: 13 }}
                         />
